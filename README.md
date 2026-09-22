@@ -6,7 +6,7 @@ It uses `dvdbackup` to copy the DVD-Video structure and `genisoimage` to create 
 
 ## Version
 
-0.4.1
+0.5.0
 
 ## Requirements
 
@@ -16,7 +16,7 @@ On Ubuntu/Debian:
 sudo apt install python3 python3-gi gir1.2-gtk-4.0 dvdbackup lsdvd genisoimage eject util-linux
 ```
 
-The current backend expects the optical drive at `/dev/sr0`.
+Available Linux optical drives (`/dev/srN`) are detected automatically and can be selected from the application window.
 
 ## Run from source
 
@@ -34,7 +34,7 @@ The `.deb` is written to `dist/`.
 
 ## Releases
 
-Push a version tag such as `v0.4.1`. GitHub Actions will build the `.deb`, create a GitHub Release and attach the package.
+Push a version tag such as `v0.5.0`. GitHub Actions will build the `.deb`, create a GitHub Release and attach the package.
 
 ## Identity
 

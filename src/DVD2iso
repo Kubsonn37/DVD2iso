@@ -2,6 +2,7 @@
 
 import os
 import re
+import fcntl
 import shutil
 import signal
 import subprocess
@@ -16,8 +17,7 @@ from gi.repository import Gio, GLib, Gtk
 
 
 APP_ID = "io.github.Kubsonn37.DVD2iso"
-APP_VERSION = "0.4.1"
-DEVICE = "/dev/sr0"
+APP_VERSION = "0.5.0"
 
 HOME = Path.home()
 CACHE_ROOT = HOME / ".cache" / "dvd-to-iso"
@@ -88,10 +88,10 @@ class DvdBackend:
         return "wersja nierozpoznana"
 
     @classmethod
-    def diagnostic_info(cls):
+    def diagnostic_info(cls, device):
         lines = [
             f"DVD2iso {APP_VERSION}",
-            f"Device: {DEVICE}",
+            f"Device: {device}",
             "",
             "Narzędzia:",
         ]
@@ -112,9 +112,39 @@ class DvdBackend:
         return "\n".join(lines) + "\n"
 
     @staticmethod
-    def detect_dvd():
+    def drive_status(device):
+        """
+        Zwraca stan napędu bez ładowania/zamykania tacki.
+
+        CDROM_DRIVE_STATUS z O_NONBLOCK pozwala sprawdzić stan
+        urządzenia optycznego bez uruchamiania lsdvd. Dzięki temu
+        start aplikacji nie zmienia fizycznego stanu napędu.
+        """
+        CDROM_DRIVE_STATUS = 0x5326
+        CDSL_CURRENT = 2 ** 31 - 1
+        statuses = {
+            0: "unknown",
+            1: "no_disc",
+            2: "tray_open",
+            3: "not_ready",
+            4: "disc_ok",
+        }
+
+        fd = None
+        try:
+            fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+            status = fcntl.ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT)
+            return statuses.get(status, "unknown")
+        except OSError:
+            return "unknown"
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    @staticmethod
+    def detect_dvd(device):
         result = subprocess.run(
-            ["lsdvd", DEVICE],
+            ["lsdvd", device],
             capture_output=True,
             text=True,
             timeout=20,
@@ -135,7 +165,7 @@ class DvdBackend:
         return match.group(1).strip()
 
     @staticmethod
-    def medium_size():
+    def medium_size(device):
         """
         Fizyczny rozmiar medium.
 
@@ -150,7 +180,7 @@ class DvdBackend:
                 [
                     "blockdev",
                     "--getsize64",
-                    DEVICE,
+                    device,
                 ],
                 capture_output=True,
                 text=True,
@@ -207,6 +237,11 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
 
         self.backend = DvdBackend()
 
+        # Stan napędów i płyty
+        self.drives = []
+        self.selected_device = None
+        self.operation_device = None
+
         # Stan płyty
         self.disc_title = None
         self.disc_present = False
@@ -241,6 +276,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
 
         self.build_ui()
         self.setup_volume_monitor()
+        self.refresh_drive_list()
 
         self.connect(
             "close-request",
@@ -287,10 +323,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         outer.append(title)
 
         subtitle = Gtk.Label(
-            label=(
-                "Utwórz obraz ISO z płyty DVD-Video"
-                f"  •  v{APP_VERSION}"
-            )
+            label="Utwórz obraz ISO z płyty DVD-Video"
         )
 
         subtitle.set_xalign(0)
@@ -327,7 +360,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         caption = Gtk.Label()
 
         caption.set_markup(
-            "<b>PŁYTA</b>"
+            "<b>Płyta</b>"
         )
 
         caption.set_xalign(0)
@@ -348,6 +381,25 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             self.refresh_button
         )
 
+        drive_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        disc_box.append(drive_row)
+
+        drive_label = Gtk.Label(label="Napęd:")
+        drive_label.set_xalign(0)
+        drive_row.append(drive_label)
+
+        self.drive_model = Gtk.StringList.new([])
+        self.drive_dropdown = Gtk.DropDown(model=self.drive_model)
+        self.drive_dropdown.set_hexpand(True)
+        self.drive_dropdown.connect(
+            "notify::selected",
+            self.on_drive_selected,
+        )
+        drive_row.append(self.drive_dropdown)
+
         self.disc_label = Gtk.Label(
             label="Sprawdzanie napędu…"
         )
@@ -367,7 +419,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         output_caption = Gtk.Label()
 
         output_caption.set_markup(
-            "<b>PLIK DOCELOWY</b>"
+            "<b>Plik docelowy</b>"
         )
 
         output_caption.set_xalign(0)
@@ -542,6 +594,11 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             self.start_button
         )
 
+        version_label = Gtk.Label(label=f"DVD2iso {APP_VERSION}")
+        version_label.set_xalign(1)
+        version_label.add_css_class("dim-label")
+        outer.append(version_label)
+
     # =========================================================
     # GIO — zdarzeniowe wykrywanie nośnika
     # =========================================================
@@ -561,10 +618,15 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
                 self.on_volume_event,
             )
 
-        self.volume_monitor.connect(
+        for signal_name in (
+            "drive-connected",
+            "drive-disconnected",
             "drive-changed",
-            self.on_drive_event,
-        )
+        ):
+            self.volume_monitor.connect(
+                signal_name,
+                self.on_drive_event,
+            )
 
     def on_volume_event(
         self,
@@ -580,7 +642,62 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         _drive,
     ):
         if not self.running:
+            self.refresh_drive_list()
             self.schedule_disc_detection()
+
+    def refresh_drive_list(self):
+        previous = self.selected_device
+        drives = []
+
+        for drive in self.volume_monitor.get_connected_drives():
+            device = drive.get_identifier("unix-device")
+            if not device:
+                continue
+
+            # Linuxowe napędy optyczne są zwykle /dev/srN.
+            # Ograniczamy listę do linuksowych urządzeń srN.
+            if not Path(device).name.startswith("sr"):
+                continue
+
+            drives.append((device, drive.get_name() or "Napęd optyczny"))
+
+        drives.sort(key=lambda item: item[0])
+        self.drives = drives
+
+        while self.drive_model.get_n_items():
+            self.drive_model.remove(0)
+
+        for device, name in drives:
+            self.drive_model.append(f"{name} — {device}")
+
+        if not drives:
+            self.selected_device = None
+            self.drive_dropdown.set_sensitive(False)
+            self.no_disc_detected(no_drive=True)
+            return
+
+        self.drive_dropdown.set_sensitive(not self.running)
+        devices = [device for device, _name in drives]
+        index = devices.index(previous) if previous in devices else 0
+        self.drive_dropdown.set_selected(index)
+        self.selected_device = devices[index]
+
+    def on_drive_selected(self, dropdown, _pspec):
+        if self.running or not self.drives:
+            return
+
+        index = dropdown.get_selected()
+        if index >= len(self.drives):
+            return
+
+        device = self.drives[index][0]
+        if device == self.selected_device:
+            return
+
+        self.selected_device = device
+        self.disc_title = None
+        self.output_path = None
+        self.detect_disc()
 
     def schedule_disc_detection(
         self,
@@ -620,6 +737,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         _button,
     ):
         if not self.running:
+            self.refresh_drive_list()
             self.detect_disc()
 
     def detect_disc(self):
@@ -627,6 +745,10 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             self.running
             or self.detecting_disc
         ):
+            return False
+
+        if not self.selected_device:
+            self.no_disc_detected(no_drive=True)
             return False
 
         self.detecting_disc = True
@@ -643,26 +765,39 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         return False
 
     def _detect_disc_worker(self):
+        device = self.selected_device
         try:
-            title = (
-                self.backend.detect_dvd()
-            )
+            # Najpierw sprawdzamy stan napędu lekkim ioctl.
+            # lsdvd uruchamiamy wyłącznie wtedy, gdy nośnik jest
+            # faktycznie gotowy. Zapobiega to zamykaniu otwartej
+            # tacki podczas uruchamiania aplikacji.
+            status = self.backend.drive_status(device)
+
+            if status != "disc_ok":
+                GLib.idle_add(
+                    self.no_disc_detected,
+                    False,
+                    status,
+                )
+                return
+
+            title = self.backend.detect_dvd(device)
 
             if not title:
                 GLib.idle_add(
                     self.no_disc_detected
                 )
-
                 return
 
             size = (
-                self.backend.medium_size()
+                self.backend.medium_size(device)
             )
 
             GLib.idle_add(
                 self.disc_detected,
                 title,
                 size,
+                device,
             )
 
         except Exception:
@@ -674,7 +809,11 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self,
         title,
         size,
+        device,
     ):
+        if device != self.selected_device:
+            self.detecting_disc = False
+            return False
         self.detecting_disc = False
         self.disc_present = True
 
@@ -694,14 +833,13 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         if size:
             self.disc_label.set_markup(
                 f"<b>{escaped}</b>\n"
-                f"DVD-Video • {DEVICE} • "
-                f"medium {self.format_size(size)}"
+                f"DVD-Video • {self.format_size(size)}"
             )
 
         else:
             self.disc_label.set_markup(
                 f"<b>{escaped}</b>\n"
-                f"DVD-Video • {DEVICE}"
+                "DVD-Video"
             )
 
         if (
@@ -722,8 +860,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             )
 
         self.stage_label.set_text(
-            "Płyta DVD-Video jest gotowa "
-            "do skopiowania."
+            "Płyta jest gotowa do skopiowania."
         )
 
         self.progress.set_fraction(0)
@@ -751,7 +888,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
 
         return False
 
-    def no_disc_detected(self):
+    def no_disc_detected(self, no_drive=False, drive_status=None):
         self.detecting_disc = False
 
         self.disc_present = False
@@ -759,10 +896,27 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self.disc_size = None
         self.output_path = None
 
-        self.disc_label.set_text(
-            "Brak płyty\n"
-            "Włóż płytę DVD-Video do napędu."
-        )
+        if no_drive:
+            self.disc_label.set_text(
+                "Nie wykryto napędu optycznego."
+            )
+        elif drive_status == "tray_open":
+            self.disc_label.set_text(
+                "Tacka jest otwarta."
+            )
+        elif drive_status == "not_ready":
+            self.disc_label.set_text(
+                "Napęd nie jest jeszcze gotowy."
+            )
+        elif drive_status == "unknown":
+            self.disc_label.set_text(
+                "Nie można określić stanu napędu."
+            )
+        else:
+            self.disc_label.set_text(
+                "Brak płyty\n"
+                "Włóż płytę DVD-Video do wybranego napędu."
+            )
 
         self.output_entry.set_text("")
 
@@ -1069,6 +1223,11 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
     # =========================================================
 
     def begin_operation(self):
+        self.operation_device = self.selected_device
+        if not self.operation_device:
+            self.show_error("Nie wybrano napędu optycznego.")
+            return
+
         timestamp = time.strftime(
             "%Y%m%d-%H%M%S"
         )
@@ -1090,7 +1249,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             )
 
             diagnostic_path.write_text(
-                self.backend.diagnostic_info(),
+                self.backend.diagnostic_info(self.operation_device),
                 encoding="utf-8",
             )
 
@@ -1151,6 +1310,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self.refresh_button.set_sensitive(
             False
         )
+        self.drive_dropdown.set_sensitive(False)
 
         self.cancel_button.set_sensitive(
             True
@@ -1288,7 +1448,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
                 [
                     "dvdbackup",
                     "-i",
-                    DEVICE,
+                    self.operation_device,
                     "-M",
                     "-o",
                     str(self.work_dir),
@@ -1723,10 +1883,29 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self,
         _button=None,
     ):
-        if (
-            not self.running
-            or self.cancel_requested
-        ):
+        if not self.running or self.cancel_requested:
+            return
+
+        dialog = Gtk.AlertDialog()
+        dialog.set_message("Przerwać operację?")
+        dialog.set_detail(
+            "Kopiowanie DVD jest w toku.\n\n"
+            "Czy na pewno chcesz anulować operację?"
+        )
+        dialog.set_buttons(["Kontynuuj kopiowanie", "Przerwij operację"])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(0)
+        dialog.choose(self, None, self.cancel_response)
+
+    def cancel_response(self, dialog, result):
+        try:
+            if dialog.choose_finish(result) == 1:
+                self.perform_cancel()
+        except Exception:
+            pass
+
+    def perform_cancel(self):
+        if not self.running or self.cancel_requested:
             return
 
         self.cancel_requested = True
@@ -1883,7 +2062,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             if response == 1:
                 self.close_after_cancel = True
 
-                self.cancel_operation()
+                self.perform_cancel()
 
         except Exception:
             pass
@@ -2031,6 +2210,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self.refresh_button.set_sensitive(
             True
         )
+        self.drive_dropdown.set_sensitive(bool(self.drives))
 
         self.start_button.set_sensitive(
             self.disc_present
@@ -2084,7 +2264,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             result = subprocess.run(
                 [
                     "eject",
-                    DEVICE,
+                    self.selected_device,
                 ],
                 capture_output=True,
                 text=True,
