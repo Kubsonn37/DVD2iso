@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.5.0}"
+VERSION="${VERSION:-0.5.1}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 PKG="$STAGE/dvd2iso_${VERSION}_all"

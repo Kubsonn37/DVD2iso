@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Fixed an eject race where GIO events could trigger DVD detection while the tray was opening, causing some drives to pull the tray back in.
+- DVD detection is temporarily suppressed during an explicit eject and resumes after the drive reports that the disc is no longer ready.
+- Pending detection callbacks are cancelled before ejecting.
+
 ## 0.5.0
 
 - Automatic discovery and selection of multiple optical drives.

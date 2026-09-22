@@ -4,14 +4,6 @@ DVD2iso is a GTK4 application for Linux that creates an ISO image from a DVD-Vid
 
 It uses `dvdbackup` to copy the DVD-Video structure and `genisoimage` to create the final ISO. DVD detection is event-driven through GIO instead of continuously polling the optical drive.
 
-## Development
-
-DVD2iso is a fully vibe-coded project. The application was developed
-with the assistance of generative AI, including its Python/GTK code,
-packaging, and project documentation.
-
-Releases are tested on real hardware before publication.
-
 ## Version
 
 0.5.0

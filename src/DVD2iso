@@ -17,7 +17,7 @@ from gi.repository import Gio, GLib, Gtk
 
 
 APP_ID = "io.github.Kubsonn37.DVD2iso"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 
 HOME = Path.home()
 CACHE_ROOT = HOME / ".cache" / "dvd-to-iso"
@@ -248,6 +248,10 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self.disc_size = None
         self.detecting_disc = False
         self.detect_timeout_id = None
+        # Podczas jawnego wysuwania ignorujemy przejściowe zdarzenia GIO.
+        # Inaczej detekcja może uruchomić lsdvd zanim tacka zdąży się otworzyć
+        # i niektóre napędy ponownie ją wciągają.
+        self.eject_in_progress = False
 
         # Stan operacji
         self.running = False
@@ -633,7 +637,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         _monitor,
         _volume,
     ):
-        if not self.running:
+        if not self.running and not self.eject_in_progress:
             self.schedule_disc_detection()
 
     def on_drive_event(
@@ -643,7 +647,8 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
     ):
         if not self.running:
             self.refresh_drive_list()
-            self.schedule_disc_detection()
+            if not self.eject_in_progress:
+                self.schedule_disc_detection()
 
     def refresh_drive_list(self):
         previous = self.selected_device
@@ -709,6 +714,9 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         uruchomione tylko raz po uspokojeniu zdarzeń.
         """
 
+        if self.eject_in_progress:
+            return
+
         if self.detect_timeout_id is not None:
             GLib.source_remove(
                 self.detect_timeout_id
@@ -744,6 +752,7 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         if (
             self.running
             or self.detecting_disc
+            or self.eject_in_progress
         ):
             return False
 
@@ -2243,29 +2252,31 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
         self,
         _button,
     ):
-        if self.running:
+        if self.running or self.eject_in_progress:
             return
 
-        self.eject_button.set_sensitive(
-            False
-        )
+        # Zablokuj detekcję PRZED wywołaniem eject. Zdarzenia GIO mogą
+        # nadejść jeszcze zanim polecenie eject zakończy działanie.
+        self.eject_in_progress = True
 
-        self.stage_label.set_text(
-            "Wysuwanie płyty…"
-        )
+        if self.detect_timeout_id is not None:
+            GLib.source_remove(self.detect_timeout_id)
+            self.detect_timeout_id = None
 
+        self.eject_button.set_sensitive(False)
+        self.stage_label.set_text("Wysuwanie płyty…")
+
+        device = self.selected_device
         threading.Thread(
             target=self._eject_worker,
+            args=(device,),
             daemon=True,
         ).start()
 
-    def _eject_worker(self):
+    def _eject_worker(self, device):
         try:
             result = subprocess.run(
-                [
-                    "eject",
-                    self.selected_device,
-                ],
+                ["eject", device],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -2274,47 +2285,48 @@ class DvdToIsoWindow(Gtk.ApplicationWindow):
             if result.returncode != 0:
                 message = (
                     result.stderr.strip()
-                    or
-                    "Nie udało się wysunąć płyty."
+                    or "Nie udało się wysunąć płyty."
                 )
-
-                GLib.idle_add(
-                    self.eject_failed,
-                    message,
-                )
-
+                GLib.idle_add(self.eject_failed, message)
                 return
 
-            GLib.idle_add(
-                self.eject_started
-            )
+            # Nie odblokowujemy detekcji natychmiast po powrocie `eject`.
+            # Czekamy, aż napęd rzeczywiście przestanie zgłaszać disc_ok.
+            # To jest wyłącznie lekki ioctl CDROM_DRIVE_STATUS — bez lsdvd.
+            deadline = time.monotonic() + 5.0
+            status = "unknown"
+            while time.monotonic() < deadline:
+                status = self.backend.drive_status(device)
+                if status != "disc_ok":
+                    break
+                time.sleep(0.1)
+
+            GLib.idle_add(self.eject_completed, device, status)
 
         except Exception as exc:
-            GLib.idle_add(
-                self.eject_failed,
-                str(exc),
-            )
+            GLib.idle_add(self.eject_failed, str(exc))
 
-    def eject_started(self):
-        self.stage_label.set_text(
-            "Płyta została wysunięta."
-        )
+    def eject_completed(self, device, status):
+        self.eject_in_progress = False
 
+        if device != self.selected_device:
+            return False
+
+        # Aktualizujemy GUI bez ponownego otwierania płyty przez lsdvd.
+        self.no_disc_detected(False, status)
+        self.stage_label.set_text("Płyta została wysunięta.")
         return False
 
     def eject_failed(
         self,
         message,
     ):
+        self.eject_in_progress = False
+
         if self.disc_present:
-            self.eject_button.set_sensitive(
-                True
-            )
+            self.eject_button.set_sensitive(True)
 
-        self.show_error(
-            message
-        )
-
+        self.show_error(message)
         return False
 
     # =========================================================
