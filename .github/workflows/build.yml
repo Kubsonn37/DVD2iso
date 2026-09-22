@@ -19,7 +19,7 @@ jobs:
       - name: Build Debian package
         run: ./packaging/build-deb.sh
       - name: Inspect Debian package
-        run: dpkg-deb --info dist/dvd2iso_0.5.0_all.deb
+        run: dpkg-deb --info dist/dvd2iso_*_all.deb
       - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:
