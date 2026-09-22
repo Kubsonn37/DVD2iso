@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.Kubsonn37.DVD2iso</id>
+  <name>DVD2iso</name>
+  <summary>Tworzenie obrazów ISO z płyt DVD-Video</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>DVD2iso jest prostą aplikacją GTK4 dla Linuksa do kopiowania struktury DVD-Video i tworzenia obrazu ISO.</p>
+  </description>
+  <launchable type="desktop-id">DVD2iso.desktop</launchable>
+  <provides>
+    <binary>DVD2iso</binary>
+  </provides>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Utility</category>
+  </categories>
+</component>

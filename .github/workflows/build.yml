@@ -1,0 +1,27 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check Python syntax
+        run: python3 -m py_compile src/DVD2iso
+      - name: Build Debian package
+        run: ./packaging/build-deb.sh
+      - name: Inspect Debian package
+        run: dpkg-deb --info dist/dvd2iso_0.4.1_all.deb
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVD2iso-deb
+          path: dist/*.deb

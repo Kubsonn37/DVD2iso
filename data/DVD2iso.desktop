@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DVD2iso
+Comment=Utwórz obraz ISO z płyty DVD-Video
+Exec=DVD2iso
+Icon=DVD2iso
+Terminal=false
+Categories=AudioVideo;Utility;
+Keywords=DVD;ISO;disc;backup;rip;
+StartupNotify=true
