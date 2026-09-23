@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.5.1}"
+VERSION="${VERSION:-0.6.0}"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 PKG="$STAGE/dvd2iso_${VERSION}_all"
@@ -9,13 +9,15 @@ OUT="$ROOT/dist/dvd2iso_${VERSION}_all.deb"
 
 mkdir -p "$ROOT/dist" "$PKG/DEBIAN" "$PKG/usr/bin" \
  "$PKG/usr/share/applications" "$PKG/usr/share/metainfo" \
- "$PKG/usr/share/doc/dvd2iso"
+ "$PKG/usr/share/doc/dvd2iso" "$PKG/usr/share/sounds/dvd2iso"
 
 install -m 0755 "$ROOT/src/DVD2iso" "$PKG/usr/bin/DVD2iso"
 install -m 0644 "$ROOT/data/DVD2iso.desktop" "$PKG/usr/share/applications/DVD2iso.desktop"
 install -m 0644 "$ROOT/data/io.github.Kubsonn37.DVD2iso.metainfo.xml" \
  "$PKG/usr/share/metainfo/io.github.Kubsonn37.DVD2iso.metainfo.xml"
 install -m 0644 "$ROOT/LICENSE" "$PKG/usr/share/doc/dvd2iso/copyright"
+install -m 0644 "$ROOT/data/sounds/complete.wav" "$PKG/usr/share/sounds/dvd2iso/complete.wav"
+install -m 0644 "$ROOT/data/sounds/error.wav" "$PKG/usr/share/sounds/dvd2iso/error.wav"
 
 for size in 64 128 256 512; do
   d="$PKG/usr/share/icons/hicolor/${size}x${size}/apps"

@@ -1,9 +1,10 @@
 Package: dvd2iso
-Version: 0.5.1
+Version: 0.6.0
 Section: video
 Priority: optional
 Architecture: all
 Depends: python3, python3-gi, gir1.2-gtk-4.0, dvdbackup, lsdvd, genisoimage, eject, util-linux
 Maintainer: Kubsonn37
+Suggests: pipewire-bin | pulseaudio-utils | alsa-utils
 Description: Create ISO images from DVD-Video discs
  DVD2iso is a GTK4 frontend using dvdbackup and genisoimage.
