@@ -1,3 +1,15 @@
+> [!NOTE]
+> **Project archived**
+>
+> DVD2iso is no longer actively developed. During development I discovered
+> that MakeMKV provides a DVD backup feature that can create ISO images
+> directly, while also offering significantly more functionality.
+>
+> DVD2iso will remain available here as an experimental, fully vibe-coded
+> Python/GTK project and as a record of its development.
+>
+> Version 0.6.0 is the final release.
+
 # DVD2iso
 
 DVD2iso is a GTK4 application for Linux that creates an ISO image from a DVD-Video disc.
